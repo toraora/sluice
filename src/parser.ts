@@ -20,6 +20,13 @@ type ServerlessConfig = {
   provider?: {
     environment?: Record<string, string>;
   };
+  custom?: {
+    'serverless-offline'?: { prefix?: string };
+    customDomain?: {
+      http?: { basePath?: string };
+      rest?: { basePath?: string };
+    };
+  };
 };
 
 function parseHandlerRef(handler: string): { module: string; exportName: string } {
@@ -67,7 +74,19 @@ export function parseServerlessYml(filePath: string): RouteTable {
   const sanitized = raw.replace(/\$\{[^}]+\}/g, 'SLUICE_PLACEHOLDER');
 
   const config = parse(sanitized) as ServerlessConfig;
+  const service = config.service ?? 'unknown';
   const providerEnvironment = cleanEnvValues(config.provider?.environment);
+
+  // Extract prefix from serverless-offline config or customDomain basePath.
+  // The value may contain SLUICE_PLACEHOLDER from stripped ${self:service} refs —
+  // replace with the actual service name.
+  let prefix = config.custom?.['serverless-offline']?.prefix
+    ?? config.custom?.customDomain?.http?.basePath
+    ?? config.custom?.customDomain?.rest?.basePath;
+  if (prefix) {
+    prefix = prefix.replace(/SLUICE_PLACEHOLDER/g, service);
+  }
+
   const routes: Route[] = [];
 
   for (const [functionName, fn] of Object.entries(config.functions ?? {})) {
@@ -92,5 +111,5 @@ export function parseServerlessYml(filePath: string): RouteTable {
     }
   }
 
-  return { service: config.service ?? 'unknown', routes, providerEnvironment };
+  return { service, routes, providerEnvironment, prefix };
 }

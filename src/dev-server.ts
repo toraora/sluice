@@ -5,7 +5,6 @@ import type { Route, RouteTable } from './types.js';
 
 type Handler = (event: APIGatewayProxyEventV2, context: Context) => Promise<APIGatewayProxyStructuredResultV2>;
 
-// AWS Lambda function names follow {service}-{stage}-{functionName}
 function buildLambdaFunctionName(service: string, stage: string, functionName: string): string {
   return `${service}-${stage}-${functionName}`;
 }
@@ -62,6 +61,13 @@ function buildFakeEvent(opts: {
   };
 }
 
+const CORS_HEADERS: Record<string, string> = {
+  'access-control-allow-origin': '*',
+  'access-control-allow-methods': 'GET, POST, PUT, PATCH, DELETE, OPTIONS',
+  'access-control-allow-headers': 'Content-Type, Authorization, X-Amz-Date, X-Api-Key, X-Amz-Security-Token',
+  'access-control-max-age': '86400',
+};
+
 type RouteEntry = {
   lambdaFunctionName: string;
   module: string;
@@ -74,14 +80,14 @@ export async function startDevServer(opts: {
   handlerBaseDir: string;
   port?: number;
   stage?: string;
+  prefix?: string;
 }) {
   const port = opts.port ?? 3000;
   const stage = opts.stage ?? 'dev';
   const baseDir = resolve(opts.handlerBaseDir);
   const service = opts.routeTable.service;
+  const prefix = opts.prefix ?? opts.routeTable.prefix;
 
-  // Inject provider-level environment variables into process.env.
-  // Don't overwrite values already set in the shell (e.g. FROST_HASURA_URL).
   for (const [key, value] of Object.entries(opts.routeTable.providerEnvironment)) {
     if (process.env[key] === undefined) {
       process.env[key] = value;
@@ -107,18 +113,29 @@ export async function startDevServer(opts: {
   const server = createServer(async (req, res) => {
     const method = (req.method ?? 'GET').toUpperCase();
     const url = new URL(req.url ?? '/', `http://localhost:${port}`);
-    const path = url.pathname;
+    let path = url.pathname;
+
+    // Strip prefix if present (e.g. /dashboard-v2-http/create-customer → /create-customer)
+    if (prefix && path.startsWith(`/${prefix}`)) {
+      path = path.slice(prefix.length + 1) || '/';
+    }
+
+    // Handle CORS preflight
+    if (method === 'OPTIONS') {
+      res.writeHead(204, CORS_HEADERS);
+      res.end();
+      return;
+    }
 
     const key = `${method} ${path}`;
     const entry = routeLookup.get(key);
 
     if (!entry) {
-      res.writeHead(404, { 'content-type': 'application/json' });
+      res.writeHead(404, { 'content-type': 'application/json', ...CORS_HEADERS });
       res.end(JSON.stringify({ error: `No handler for ${method} ${path}` }));
       return;
     }
 
-    // Set per-function env vars for this request, restoring after
     const envSnapshot: Record<string, string | undefined> = {};
     if (entry.environment) {
       for (const [key, value] of Object.entries(entry.environment)) {
@@ -145,7 +162,7 @@ export async function startDevServer(opts: {
         const mod = await import(entry.module);
         fn = mod[entry.exportName] as Handler;
         if (!fn) {
-          res.writeHead(500, { 'content-type': 'application/json' });
+          res.writeHead(500, { 'content-type': 'application/json', ...CORS_HEADERS });
           res.end(JSON.stringify({ error: `Export '${entry.exportName}' not found in ${entry.module}` }));
           return;
         }
@@ -159,7 +176,10 @@ export async function startDevServer(opts: {
       const statusCode = result.statusCode ?? 200;
       console.log(`${method} ${path} → ${statusCode} (${elapsed}ms)`);
 
-      const responseHeaders: Record<string, string> = { 'content-type': 'application/json' };
+      const responseHeaders: Record<string, string> = {
+        'content-type': 'application/json',
+        ...CORS_HEADERS,
+      };
       if (result.headers) {
         for (const [k, v] of Object.entries(result.headers)) {
           if (v !== undefined) responseHeaders[k] = String(v);
@@ -170,7 +190,7 @@ export async function startDevServer(opts: {
       res.end(result.body ?? '');
     } catch (err) {
       console.error(`${method} ${path} → 500`, err);
-      res.writeHead(500, { 'content-type': 'application/json' });
+      res.writeHead(500, { 'content-type': 'application/json', ...CORS_HEADERS });
       res.end(JSON.stringify({ error: String(err) }));
     } finally {
       if (entry.environment) {
@@ -184,11 +204,15 @@ export async function startDevServer(opts: {
 
   server.listen(port, () => {
     console.log(`sluice dev server listening on http://localhost:${port}`);
-    console.log(`service: ${service}, stage: ${stage}`);
+    console.log(`service: ${service}, stage: ${stage}${prefix ? `, prefix: /${prefix}` : ''}`);
     console.log(`${opts.routeTable.routes.length} routes loaded`);
+    if (prefix) {
+      console.log(`\nRequests to /${prefix}/* will be routed with prefix stripped`);
+    }
     console.log('');
     for (const route of opts.routeTable.routes) {
-      console.log(`  ${route.method.padEnd(6)} ${route.path}`);
+      const fullPath = prefix ? `/${prefix}${route.path}` : route.path;
+      console.log(`  ${route.method.padEnd(6)} ${fullPath}`);
     }
     console.log('');
   });

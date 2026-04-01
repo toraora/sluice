@@ -50,6 +50,7 @@ Options:
   --config, -c    Path to serverless.yml (default: ./serverless.yml)
   --port, -p      Dev server port (default: 3000)
   --stage, -s     Stage name for function naming (default: dev)
+  --prefix        URL prefix to strip (default: auto-detected from serverless-offline config)
   --region        AWS region for SSM lookups (default: from AWS config)
   --skip-ssm      Skip SSM parameter resolution (resolve-env only)
   --env-file      Load environment variables from a file (default: .env if it exists)
@@ -97,9 +98,10 @@ async function main() {
   if (command === 'dev') {
     const port = parseInt(flag('--port') ?? flag('-p') ?? '3000', 10);
     const stage = flag('--stage') ?? flag('-s') ?? 'dev';
+    const prefix = flag('--prefix');
     const baseDir = resolve(flag('--base-path') ?? configDir);
     const routeTable = parseServerlessYml(configPath);
-    await startDevServer({ routeTable, handlerBaseDir: baseDir, port, stage });
+    await startDevServer({ routeTable, handlerBaseDir: baseDir, port, stage, prefix });
     return;
   }
 
