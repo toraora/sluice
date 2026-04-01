@@ -234,7 +234,7 @@ function batchFetchSsmParams(
       };
 
       for (const param of response.Parameters) {
-        result[param.Name] = param.Value;
+        result[param.Name] = param.Value.trim();
       }
 
       if (response.InvalidParameters?.length) {
@@ -338,7 +338,8 @@ export function writeEnvFile(env: Record<string, string>, outputPath: string) {
 
   const unresolved: string[] = [];
 
-  for (const [key, value] of Object.entries(env).sort(([a], [b]) => a.localeCompare(b))) {
+  for (const [key, rawValue] of Object.entries(env).sort(([a], [b]) => a.localeCompare(b))) {
+    const value = rawValue.trim();
     if (value.includes('${')) {
       unresolved.push(key);
       lines.push(`# UNRESOLVED: ${key}=${value}`);

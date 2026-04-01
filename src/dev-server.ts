@@ -94,6 +94,17 @@ export async function startDevServer(opts: {
     }
   }
 
+  // Inject AWS_REGION / AWS_DEFAULT_REGION like Serverless Framework does
+  const region = opts.routeTable.region;
+  if (region) {
+    if (process.env['AWS_REGION'] === undefined) {
+      process.env['AWS_REGION'] = region;
+    }
+    if (process.env['AWS_DEFAULT_REGION'] === undefined) {
+      process.env['AWS_DEFAULT_REGION'] = region;
+    }
+  }
+
   const routeLookup = new Map<string, RouteEntry>();
   for (const route of opts.routeTable.routes) {
     const key = `${route.method} ${route.path}`;

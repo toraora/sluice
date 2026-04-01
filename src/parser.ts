@@ -18,6 +18,7 @@ type ServerlessConfig = {
   service: string;
   functions?: Record<string, ServerlessFunction>;
   provider?: {
+    region?: string;
     environment?: Record<string, string>;
   };
   custom?: {
@@ -60,8 +61,12 @@ function cleanEnvValues(env: unknown): Record<string, string> {
   if (!env || typeof env !== 'object' || Array.isArray(env)) return {};
   const result: Record<string, string> = {};
   for (const [key, value] of Object.entries(env as Record<string, unknown>)) {
-    if (value === 'SLUICE_PLACEHOLDER' || value === null || value === undefined) continue;
-    result[key] = String(value);
+    if (value === null || value === undefined) continue;
+    const str = String(value);
+    // Skip any value that contains SLUICE_PLACEHOLDER (including partial matches
+    // from nested ${...} expressions that the sanitizer couldn't fully strip)
+    if (str.includes('SLUICE_PLACEHOLDER')) continue;
+    result[key] = str;
   }
   return result;
 }
@@ -76,6 +81,9 @@ export function parseServerlessYml(filePath: string): RouteTable {
   const config = parse(sanitized) as ServerlessConfig;
   const service = config.service ?? 'unknown';
   const providerEnvironment = cleanEnvValues(config.provider?.environment);
+  const region = config.provider?.region && !config.provider.region.includes('SLUICE_PLACEHOLDER')
+    ? config.provider.region
+    : undefined;
 
   // Extract prefix from serverless-offline config or customDomain basePath.
   // The value may contain SLUICE_PLACEHOLDER from stripped ${self:service} refs —
@@ -111,5 +119,5 @@ export function parseServerlessYml(filePath: string): RouteTable {
     }
   }
 
-  return { service, routes, providerEnvironment, prefix };
+  return { service, routes, providerEnvironment, prefix, region };
 }

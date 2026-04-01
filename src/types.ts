@@ -13,6 +13,7 @@ export type RouteTable = {
   routes: Route[];
   providerEnvironment: Record<string, string>;
   prefix?: string;
+  region?: string;
 };
 
 export type SluiceConfig = {
