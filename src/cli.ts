@@ -6,6 +6,7 @@ import { parseServerlessYml } from './parser.js';
 import { generateRouterFile } from './generate.js';
 import { startDevServer } from './dev-server.js';
 import { buildAndPackage } from './deploy.js';
+import { resolveEnvironment, writeEnvFile } from './resolve-env.js';
 
 const args = process.argv.slice(2);
 const command = args[0];
@@ -26,7 +27,6 @@ function loadEnvFile(filePath: string) {
     if (eqIdx === -1) continue;
     const key = trimmed.substring(0, eqIdx).trim();
     let value = trimmed.substring(eqIdx + 1).trim();
-    // Strip surrounding quotes
     if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
       value = value.slice(1, -1);
     }
@@ -40,17 +40,20 @@ function usage(): never {
   console.log(`sluice - single-lambda router for Serverless Framework projects
 
 Commands:
-  dev       Start a local dev server
-  generate  Generate a router file from serverless.yml
-  build     Bundle all handlers + generate SAM template
-  routes    Print the route table
+  dev          Start a local dev server
+  generate     Generate a router file from serverless.yml
+  build        Bundle all handlers + generate SAM template
+  routes       Print the route table
+  resolve-env  Resolve environment variables (including SSM) and write .env file
 
 Options:
   --config, -c    Path to serverless.yml (default: ./serverless.yml)
   --port, -p      Dev server port (default: 3000)
   --stage, -s     Stage name for function naming (default: dev)
+  --region        AWS region for SSM lookups (default: from AWS config)
+  --skip-ssm      Skip SSM parameter resolution (resolve-env only)
   --env-file      Load environment variables from a file (default: .env if it exists)
-  --out, -o       Output path for generate/build
+  --out, -o       Output path for generate/build/resolve-env
   --base-path     Handler base directory (default: directory of serverless.yml)
   --stack-name    CloudFormation stack name (default: sluice-<service>)
   --minify        Minify the bundle
@@ -65,8 +68,10 @@ async function main() {
   const configPath = resolve(flag('--config') ?? flag('-c') ?? 'serverless.yml');
   const configDir = resolve(configPath, '..');
 
-  const envFile = flag('--env-file') ?? resolve(configDir, '.env');
-  loadEnvFile(envFile);
+  const envFilePath = flag('--env-file') ?? resolve(configDir, '.env');
+  if (command !== 'resolve-env') {
+    loadEnvFile(envFilePath);
+  }
 
   if (command === 'routes') {
     const routeTable = parseServerlessYml(configPath);
@@ -122,6 +127,26 @@ async function main() {
     console.log(`SAM template → ${result.templateFile}`);
     console.log(`\nDeploy with:`);
     console.log(`  sam deploy --template-file ${result.templateFile} --stack-name ${result.stackName} --capabilities CAPABILITY_IAM --resolve-s3`);
+    return;
+  }
+
+  if (command === 'resolve-env') {
+    const stage = flag('--stage') ?? flag('-s') ?? 'dev';
+    const region = flag('--region');
+    const skipSsm = args.includes('--skip-ssm');
+    const outFile = resolve(flag('--out') ?? flag('-o') ?? resolve(configDir, '.env'));
+
+    console.log(`Resolving environment for stage: ${stage}`);
+
+    const env = await resolveEnvironment({
+      serverlessFile: configPath,
+      stage,
+      region,
+      skipSsm,
+    });
+
+    writeEnvFile(env, outFile);
+    console.log(`Wrote ${Object.keys(env).length} variables → ${outFile}`);
     return;
   }
 
