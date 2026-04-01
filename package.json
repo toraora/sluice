@@ -1,6 +1,6 @@
 {
-  "name": "sluice",
-  "version": "0.1.0",
+  "name": "@tora-dev/sluice",
+  "version": "0.1.1",
   "description": "Bundle Serverless Framework functions into a single Lambda with a router for PR preview deploys and local dev",
   "type": "module",
   "main": "dist/index.js",

@@ -1,9 +1,25 @@
 import { createServer } from 'node:http';
 import { resolve } from 'node:path';
+import { existsSync } from 'node:fs';
 import type { APIGatewayProxyEventV2, APIGatewayProxyStructuredResultV2, Context } from 'aws-lambda';
 import type { Route, RouteTable } from './types.js';
 
 type Handler = (event: APIGatewayProxyEventV2, context: Context) => Promise<APIGatewayProxyStructuredResultV2>;
+
+const MODULE_EXTENSIONS = ['.ts', '.js', '.mts', '.mjs', '.cts', '.cjs'];
+
+function resolveModulePath(basePath: string): string {
+  if (existsSync(basePath)) return basePath;
+  for (const ext of MODULE_EXTENSIONS) {
+    if (existsSync(basePath + ext)) return basePath + ext;
+  }
+  // Try index files in case basePath is a directory
+  for (const ext of MODULE_EXTENSIONS) {
+    const indexPath = resolve(basePath, `index${ext}`);
+    if (existsSync(indexPath)) return indexPath;
+  }
+  return basePath;
+}
 
 function buildLambdaFunctionName(service: string, stage: string, functionName: string): string {
   return `${service}-${stage}-${functionName}`;
@@ -108,12 +124,12 @@ export async function startDevServer(opts: {
   const routeLookup = new Map<string, RouteEntry>();
   for (const route of opts.routeTable.routes) {
     const key = `${route.method} ${route.path}`;
-    const modulePath = route.module.startsWith('./')
+    const rawPath = route.module.startsWith('./')
       ? resolve(baseDir, route.module.slice(2))
       : resolve(baseDir, route.module);
     routeLookup.set(key, {
       lambdaFunctionName: buildLambdaFunctionName(service, stage, route.functionName),
-      module: modulePath,
+      module: resolveModulePath(rawPath),
       exportName: route.exportName,
       environment: route.environment,
     });
