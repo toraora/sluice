@@ -1,6 +1,6 @@
 import { readFileSync, existsSync, writeFileSync } from 'node:fs';
 import { resolve, dirname } from 'node:path';
-import { execSync } from 'node:child_process';
+import { execFileSync } from 'node:child_process';
 import { parse } from 'yaml';
 
 type RawConfig = Record<string, unknown>;
@@ -26,6 +26,11 @@ function resolveExpression(
 ): string | Record<string, unknown> | undefined {
   // ${sls:stage}
   if (expr === 'sls:stage') return ctx.stage;
+
+  // ${opt:stage} and ${opt:stage, fallback} — equivalent to sls:stage
+  if (expr.startsWith('opt:stage')) {
+    return ctx.stage;
+  }
 
   // ${self:service}
   if (expr.startsWith('self:')) {
@@ -205,18 +210,24 @@ function batchFetchSsmParams(
 ): Record<string, string> {
   if (paramNames.length === 0) return {};
 
+  // Filter out param names that still contain unresolved variable references
+  const cleanNames = paramNames.filter((n) => !n.includes('${'));
+  const skippedNames = paramNames.filter((n) => n.includes('${'));
+  if (skippedNames.length > 0) {
+    console.warn(`Skipping ${skippedNames.length} SSM params with unresolved references:`);
+    for (const n of skippedNames) console.warn(`  ${n}`);
+  }
+
   const result: Record<string, string> = {};
-  // AWS SSM GetParameters supports up to 10 params per call
   const batchSize = 10;
 
-  for (let i = 0; i < paramNames.length; i += batchSize) {
-    const batch = paramNames.slice(i, i + batchSize);
-    const names = batch.map((n) => `"${n}"`).join(' ');
-    const regionFlag = region ? `--region ${region}` : '';
+  for (let i = 0; i < cleanNames.length; i += batchSize) {
+    const batch = cleanNames.slice(i, i + batchSize);
+    const ssmArgs = ['ssm', 'get-parameters', '--names', ...batch, '--output', 'json'];
+    if (region) ssmArgs.push('--region', region);
 
     try {
-      const cmd = `aws ssm get-parameters --names ${names} ${regionFlag} --output json 2>&1`;
-      const stdout = execSync(cmd, { encoding: 'utf8', timeout: 30000 });
+      const stdout = execFileSync('aws', ssmArgs, { encoding: 'utf8', timeout: 30000 });
       const response = JSON.parse(stdout) as {
         Parameters: Array<{ Name: string; Value: string }>;
         InvalidParameters?: string[];
