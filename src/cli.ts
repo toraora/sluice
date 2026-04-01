@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { resolve } from 'node:path';
+import { readFileSync, existsSync } from 'node:fs';
 import { parseServerlessYml } from './parser.js';
 import { generateRouterFile } from './generate.js';
 import { startDevServer } from './dev-server.js';
@@ -15,6 +16,26 @@ function flag(name: string): string | undefined {
   return args[idx + 1];
 }
 
+function loadEnvFile(filePath: string) {
+  if (!existsSync(filePath)) return;
+  const content = readFileSync(filePath, 'utf8');
+  for (const line of content.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    const eqIdx = trimmed.indexOf('=');
+    if (eqIdx === -1) continue;
+    const key = trimmed.substring(0, eqIdx).trim();
+    let value = trimmed.substring(eqIdx + 1).trim();
+    // Strip surrounding quotes
+    if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
+      value = value.slice(1, -1);
+    }
+    if (process.env[key] === undefined) {
+      process.env[key] = value;
+    }
+  }
+}
+
 function usage(): never {
   console.log(`sluice - single-lambda router for Serverless Framework projects
 
@@ -27,6 +48,8 @@ Commands:
 Options:
   --config, -c    Path to serverless.yml (default: ./serverless.yml)
   --port, -p      Dev server port (default: 3000)
+  --stage, -s     Stage name for function naming (default: dev)
+  --env-file      Load environment variables from a file (default: .env if it exists)
   --out, -o       Output path for generate/build
   --base-path     Handler base directory (default: directory of serverless.yml)
   --stack-name    CloudFormation stack name (default: sluice-<service>)
@@ -41,6 +64,9 @@ async function main() {
 
   const configPath = resolve(flag('--config') ?? flag('-c') ?? 'serverless.yml');
   const configDir = resolve(configPath, '..');
+
+  const envFile = flag('--env-file') ?? resolve(configDir, '.env');
+  loadEnvFile(envFile);
 
   if (command === 'routes') {
     const routeTable = parseServerlessYml(configPath);
@@ -65,9 +91,10 @@ async function main() {
 
   if (command === 'dev') {
     const port = parseInt(flag('--port') ?? flag('-p') ?? '3000', 10);
+    const stage = flag('--stage') ?? flag('-s') ?? 'dev';
     const baseDir = resolve(flag('--base-path') ?? configDir);
     const routeTable = parseServerlessYml(configPath);
-    await startDevServer({ routeTable, handlerBaseDir: baseDir, port });
+    await startDevServer({ routeTable, handlerBaseDir: baseDir, port, stage });
     return;
   }
 

@@ -1,9 +1,14 @@
 import { createServer } from 'node:http';
-import { resolve, dirname } from 'node:path';
+import { resolve } from 'node:path';
 import type { APIGatewayProxyEventV2, APIGatewayProxyStructuredResultV2, Context } from 'aws-lambda';
-import type { RouteTable } from './types.js';
+import type { Route, RouteTable } from './types.js';
 
 type Handler = (event: APIGatewayProxyEventV2, context: Context) => Promise<APIGatewayProxyStructuredResultV2>;
+
+// AWS Lambda function names follow {service}-{stage}-{functionName}
+function buildLambdaFunctionName(service: string, stage: string, functionName: string): string {
+  return `${service}-${stage}-${functionName}`;
+}
 
 function buildFakeContext(functionName: string): Context {
   return {
@@ -57,24 +62,43 @@ function buildFakeEvent(opts: {
   };
 }
 
+type RouteEntry = {
+  lambdaFunctionName: string;
+  module: string;
+  exportName: string;
+  environment?: Record<string, string>;
+};
+
 export async function startDevServer(opts: {
   routeTable: RouteTable;
   handlerBaseDir: string;
   port?: number;
+  stage?: string;
 }) {
   const port = opts.port ?? 3000;
+  const stage = opts.stage ?? 'dev';
   const baseDir = resolve(opts.handlerBaseDir);
+  const service = opts.routeTable.service;
 
-  const routeLookup = new Map<string, { functionName: string; module: string; exportName: string }>();
+  // Inject provider-level environment variables into process.env.
+  // Don't overwrite values already set in the shell (e.g. FROST_HASURA_URL).
+  for (const [key, value] of Object.entries(opts.routeTable.providerEnvironment)) {
+    if (process.env[key] === undefined) {
+      process.env[key] = value;
+    }
+  }
+
+  const routeLookup = new Map<string, RouteEntry>();
   for (const route of opts.routeTable.routes) {
     const key = `${route.method} ${route.path}`;
     const modulePath = route.module.startsWith('./')
       ? resolve(baseDir, route.module.slice(2))
       : resolve(baseDir, route.module);
     routeLookup.set(key, {
-      functionName: route.functionName,
+      lambdaFunctionName: buildLambdaFunctionName(service, stage, route.functionName),
       module: modulePath,
       exportName: route.exportName,
+      environment: route.environment,
     });
   }
 
@@ -94,6 +118,15 @@ export async function startDevServer(opts: {
       return;
     }
 
+    // Set per-function env vars for this request, restoring after
+    const envSnapshot: Record<string, string | undefined> = {};
+    if (entry.environment) {
+      for (const [key, value] of Object.entries(entry.environment)) {
+        envSnapshot[key] = process.env[key];
+        process.env[key] = value;
+      }
+    }
+
     let body = '';
     for await (const chunk of req) body += chunk;
 
@@ -104,7 +137,7 @@ export async function startDevServer(opts: {
     }
 
     const event = buildFakeEvent({ method, path, headers, body: body || null });
-    const context = buildFakeContext(entry.functionName);
+    const context = buildFakeContext(entry.lambdaFunctionName);
 
     try {
       let fn = resolved.get(key);
@@ -139,12 +172,20 @@ export async function startDevServer(opts: {
       console.error(`${method} ${path} → 500`, err);
       res.writeHead(500, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ error: String(err) }));
+    } finally {
+      if (entry.environment) {
+        for (const [key, original] of Object.entries(envSnapshot)) {
+          if (original === undefined) delete process.env[key];
+          else process.env[key] = original;
+        }
+      }
     }
   });
 
   server.listen(port, () => {
     console.log(`sluice dev server listening on http://localhost:${port}`);
-    console.log(`${opts.routeTable.routes.length} routes loaded from ${opts.routeTable.service}`);
+    console.log(`service: ${service}, stage: ${stage}`);
+    console.log(`${opts.routeTable.routes.length} routes loaded`);
     console.log('');
     for (const route of opts.routeTable.routes) {
       console.log(`  ${route.method.padEnd(6)} ${route.path}`);

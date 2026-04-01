@@ -11,11 +11,15 @@ type ServerlessEvent = {
 type ServerlessFunction = {
   handler: string;
   events?: ServerlessEvent[];
+  environment?: Record<string, string>;
 };
 
 type ServerlessConfig = {
   service: string;
   functions?: Record<string, ServerlessFunction>;
+  provider?: {
+    environment?: Record<string, string>;
+  };
 };
 
 function parseHandlerRef(handler: string): { module: string; exportName: string } {
@@ -32,7 +36,7 @@ function parseHandlerRef(handler: string): { module: string; exportName: string 
 function extractHttpEvent(event: ServerlessEvent): { method: string; path: string } | null {
   const httpApi = event.httpApi;
   if (httpApi) {
-    if (typeof httpApi === 'string') return null; // e.g. httpApi: '*'
+    if (typeof httpApi === 'string') return null;
     return { method: httpApi.method.toUpperCase(), path: httpApi.path };
   }
 
@@ -45,6 +49,16 @@ function extractHttpEvent(event: ServerlessEvent): { method: string; path: strin
   return null;
 }
 
+function cleanEnvValues(env: unknown): Record<string, string> {
+  if (!env || typeof env !== 'object' || Array.isArray(env)) return {};
+  const result: Record<string, string> = {};
+  for (const [key, value] of Object.entries(env as Record<string, unknown>)) {
+    if (value === 'SLUICE_PLACEHOLDER' || value === null || value === undefined) continue;
+    result[key] = String(value);
+  }
+  return result;
+}
+
 export function parseServerlessYml(filePath: string): RouteTable {
   const raw = readFileSync(filePath, 'utf8');
 
@@ -53,12 +67,14 @@ export function parseServerlessYml(filePath: string): RouteTable {
   const sanitized = raw.replace(/\$\{[^}]+\}/g, 'SLUICE_PLACEHOLDER');
 
   const config = parse(sanitized) as ServerlessConfig;
+  const providerEnvironment = cleanEnvValues(config.provider?.environment);
   const routes: Route[] = [];
 
   for (const [functionName, fn] of Object.entries(config.functions ?? {})) {
     if (!fn.events) continue;
 
     const { module, exportName } = parseHandlerRef(fn.handler);
+    const fnEnv = cleanEnvValues(fn.environment);
 
     for (const event of fn.events) {
       const httpEvent = extractHttpEvent(event);
@@ -71,9 +87,10 @@ export function parseServerlessYml(filePath: string): RouteTable {
         handler: fn.handler,
         module,
         exportName,
+        environment: Object.keys(fnEnv).length > 0 ? fnEnv : undefined,
       });
     }
   }
 
-  return { service: config.service ?? 'unknown', routes };
+  return { service: config.service ?? 'unknown', routes, providerEnvironment };
 }
