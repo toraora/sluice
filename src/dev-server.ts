@@ -1,4 +1,5 @@
 import { createServer } from 'node:http';
+import { randomUUID } from 'node:crypto';
 import { resolve } from 'node:path';
 import { existsSync } from 'node:fs';
 import type { APIGatewayProxyEventV2, APIGatewayProxyStructuredResultV2, Context } from 'aws-lambda';
@@ -31,7 +32,7 @@ function buildFakeContext(functionName: string): Context {
     functionVersion: '$LATEST',
     invokedFunctionArn: `arn:aws:lambda:us-east-1:000000000000:function:${functionName}`,
     memoryLimitInMB: '1024',
-    awsRequestId: crypto.randomUUID(),
+    awsRequestId: randomUUID(),
     logGroupName: `/aws/lambda/${functionName}`,
     logStreamName: 'local',
     callbackWaitsForEmptyEventLoop: true,
@@ -66,7 +67,7 @@ function buildFakeEvent(opts: {
         sourceIp: '127.0.0.1',
         userAgent: opts.headers['user-agent'] ?? 'sluice-dev',
       },
-      requestId: crypto.randomUUID(),
+      requestId: randomUUID(),
       routeKey: `${opts.method} ${opts.path}`,
       stage: '$default',
       time: new Date().toISOString(),
